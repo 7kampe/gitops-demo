@@ -6,14 +6,14 @@ Celem projektu jest zbudowanie środowiska DevOps/GitOps na AWS, w którym aplik
 
 Główne technologie:
 
-- **AWS** — infrastruktura chmurowa.
-- **Terraform** — Infrastructure as Code.
-- **Amazon EKS** — Kubernetes zarządzany przez AWS.
-- **Jenkins** — automatyzacja procesu CI/CD.
-- **Amazon ECR** — przechowywanie obrazów kontenerowych.
-- **Argo CD** — wdrażanie aplikacji w modelu GitOps.
-- **Helm** — zarządzanie konfiguracją aplikacji Kubernetes.
-- **Podman** — budowanie obrazów kontenerowych.
+- **AWS** - infrastruktura chmurowa.
+- **Terraform** - Infrastructure as Code.
+- **Amazon EKS** - Kubernetes zarządzany przez AWS.
+- **Jenkins** - automatyzacja procesu CI/CD.
+- **Amazon ECR** - przechowywanie obrazów kontenerowych.
+- **Argo CD** - wdrażanie aplikacji w modelu GitOps.
+- **Helm** - zarządzanie konfiguracją aplikacji Kubernetes.
+- **Podman** - budowanie obrazów kontenerowych.
 
 Repozytorium: https://github.com/7kampe/gitops-demo.git
 
