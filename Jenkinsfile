@@ -5,6 +5,12 @@ pipeline {
         }
     }
 
+    environment {
+        ECR_REGISTRY = '211007024623.dkr.ecr.eu-west-1.amazonaws.com'
+        ECR_REPOSITORY = 'gitops-demo'
+        AWS_REGION = 'eu-west-1'
+    }
+
     stages {
 
         stage('Checkout') {
@@ -17,6 +23,15 @@ pipeline {
                         credentialsId: 'github-push'
                     ]]
                 ])
+
+                script {
+                    env.GIT_SHA = sh(
+                        script: 'git rev-parse --short=7 HEAD',
+                        returnStdout: true
+                    ).trim()
+
+                    echo "Git SHA: ${env.GIT_SHA}"
+                }
 
                 sh '''
                     git status
@@ -61,23 +76,26 @@ pipeline {
                         echo "=== Application Containerfile ==="
                         cat Containerfile
 
-                        echo "=== Build application image ==="
+                        echo "=== Build image ${GIT_SHA} ==="
+
                         podman build \
-                          -t gitops-demo:test \
+                          -t ${ECR_REGISTRY}/${ECR_REPOSITORY}:${GIT_SHA} \
                           -f Containerfile \
                           .
 
-                        aws ecr get-login-password --region eu-west-1 | \
+                        echo "=== Login to ECR ==="
+
+                        aws ecr get-login-password \
+                          --region ${AWS_REGION} | \
                           podman login \
                           --username AWS \
                           --password-stdin \
-                          211007024623.dkr.ecr.eu-west-1.amazonaws.com
+                          ${ECR_REGISTRY}
 
-                        podman tag gitops-demo:test \
-                          211007024623.dkr.ecr.eu-west-1.amazonaws.com/gitops-demo:test
+                        echo "=== Push image ${GIT_SHA} ==="
 
                         podman push \
-                          211007024623.dkr.ecr.eu-west-1.amazonaws.com/gitops-demo:test
+                          ${ECR_REGISTRY}/${ECR_REPOSITORY}:${GIT_SHA}
                     '''
                 }
             }
@@ -87,26 +105,45 @@ pipeline {
             steps {
                 container('tools') {
                     sh '''
-                        #sed -i 's/tag: ".*"/tag: "test"/' nginx/values.yaml
+                        echo "=== Current tag ==="
                         grep -n "tag:" nginx/values.yaml
+
+                        echo "=== Updating tag to ${GIT_SHA} ==="
+
+                        sed -i \
+                          's/tag: ".*"/tag: "'"${GIT_SHA"'"/' \
+                          nginx/values.yaml
+
+                        echo "=== New tag ==="
+                        grep -n "tag:" nginx/values.yaml
+
+                        echo "=== Git diff ==="
                         git diff -- nginx/values.yaml
                     '''
                 }
             }
         }
-        stage('Commit and Push') {
-    steps {
-        container('tools') {
-            sh '''
-                git config user.name "Jenkins"
-                git config user.email "jenkins@localhost"
 
-                git add nginx/values.yaml
-                git commit -m "Update image tag to test"
-                git push origin HEAD:main
-            '''
+        stage('Commit and Push') {
+            steps {
+                container('tools') {
+                    sh '''
+                        git config user.name "Jenkins"
+                        git config user.email "jenkins@localhost"
+
+                        git add nginx/values.yaml
+
+                        if git diff --cached --quiet; then
+                            echo "No changes to commit"
+                            exit 0
+                        fi
+
+                        git commit -m "Update image tag to ${GIT_SHA}"
+
+                        git push origin HEAD:main
+                    '''
+                }
+            }
         }
-    }
-}
     }
 }
