@@ -1,390 +1,387 @@
-# AWS GitOps Lab --- dokumentacja i szybkie odtworzenie
+# AWS GitOps Lab — dokumentacja
 
 ## 1. Cel projektu
 
-Laboratorium pokazuje przepływ CI/CD i GitOps na AWS:
+Celem projektu jest zbudowanie środowiska DevOps/GitOps na AWS, w którym aplikacja nginx jest budowana przez Jenkins, publikowana w Amazon ECR, a następnie wdrażana w klastrze Kubernetes przez Argo CD.
 
-1.  Kod aplikacji i konfiguracja Helm są przechowywane w GitHub.
-2.  Jenkins pobiera repozytorium i wykonuje pipeline z pliku
-    `Jenkinsfile`.
-3.  Helm sprawdza chart, a Podman buduje obraz kontenera.
-4.  Jenkins wysyła obraz do Amazon ECR.
-5.  Jenkins aktualizuje `nginx/values.yaml` i wypycha zmianę do gałęzi
-    `main`.
-6.  Argo CD wykrywa zmianę w Git i wdraża nową wersję do EKS.
+Główne technologie:
 
-## 2. Repozytorium i zasoby
+- **AWS** — infrastruktura chmurowa.
+- **Terraform** — Infrastructure as Code.
+- **Amazon EKS** — Kubernetes zarządzany przez AWS.
+- **Jenkins** — automatyzacja procesu CI/CD.
+- **Amazon ECR** — przechowywanie obrazów kontenerowych.
+- **Argo CD** — wdrażanie aplikacji w modelu GitOps.
+- **Helm** — zarządzanie konfiguracją aplikacji Kubernetes.
+- **Podman** — budowanie obrazów kontenerowych.
 
--   Repozytorium GitHub: `https://github.com/7kampe/gitops-demo.git`
--   Gałąź: `main`
--   Region AWS: `eu-central-1` (Frankfurt)
--   Klaster EKS: `gitops-lab`
--   Namespace Argo CD: `argocd`
--   Namespace Jenkins: `jenkins`
--   Job Jenkins: `gitops-demo`
--   Szablon agenta Kubernetes: `gitops-agent`
--   Kontener narzędziowy agenta: `tools`
--   Konto serwisowe agenta: `jenkins-agent`
--   Rola IAM dla ECR: `gitops-jenkins-ecr`
--   Repozytorium ECR aplikacji: `gitops-demo`
--   Repozytorium ECR agenta: `gitops-jenkins-agent`
--   Aplikacja Argo CD: `nginx-demo`
--   Chart Helm aplikacji: katalog `nginx/`
+Repozytorium: https://github.com/7kampe/gitops-demo.git
 
-W konfiguracji Terraform klaster używa Kubernetes `1.33`, węzła
-`t3.medium`, publicznych podsieci i publicznego endpointu EKS. NAT
-Gateway jest wyłączony. Jenkins ma wyłączoną trwałą pamięć
-(`persistence.enabled=false`), aby nie wymagać PVC/EBS w tym labie.
+Region AWS używany w labie: `eu-central-1`.
 
-## 3. Architektura
+## 2. Struktura repozytorium
 
-``` text
-GitHub (main)
-   | Jenkinsfile + Containerfile + nginx/ chart
-   v
-Jenkins job: gitops-demo
-   |-- checkout
-   |-- helm lint nginx
-   |-- Podman build
-   |-- AWS Pod Identity -> IAM role gitops-jenkins-ecr
-   |-- push image
-   |-- update nginx/values.yaml + git push
-   v
-GitHub (nowy tag obrazu w nginx/values.yaml)
-   |
-   v
-Argo CD (Application: nginx-demo)
-   |
-   v
-Amazon EKS -> Deployment nginx -> pody nginx
-```
+Kod infrastruktury Terraform znajduje się w katalogu `terraform/`, wewnątrz repozytorium aplikacji.
 
-## 4. Najważniejsze elementy repozytorium
-
-Oczekiwana struktura:
-
-``` text
+```text
 gitops-demo/
+├── .gitignore
 ├── Containerfile
 ├── Jenkinsfile
 ├── argocd/
-│   └── nginx-demo.yaml
 ├── jenkins-agent/
-│   └── Containerfile
-└── nginx/
-    ├── Chart.yaml
-    ├── values.yaml
-    └── templates/
+├── nginx/
+└── terraform/
+    ├── main.tf
+    ├── variables.tf
+    └── outputs.tf
 ```
 
--   `Containerfile` --- buduje obraz nginx z własną stroną.
--   `Jenkinsfile` --- definiuje pipeline.
--   `nginx/` --- chart Helm aplikacji.
--   `nginx/values.yaml` --- m.in. liczba replik, adres obrazu i tag.
--   `argocd/nginx-demo.yaml` --- zasób Argo CD typu `Application`.
--   `jenkins-agent/Containerfile` --- definicja obrazu narzędziowego
-    agenta Jenkins.
+Opis elementów:
 
-### Ważna konfiguracja Jenkinsfile
+| Element | Przeznaczenie |
+|---|---|
+| `Containerfile` | Definicja obrazu aplikacji nginx |
+| `Jenkinsfile` | Pipeline CI/CD |
+| `argocd/` | Konfiguracja aplikacji Argo CD |
+| `jenkins-agent/` | Definicja obrazu agenta Jenkins |
+| `nginx/` | Helm chart aplikacji |
+| `terraform/` | Kod infrastruktury AWS |
+| `.gitignore` | Wykluczenie lokalnych plików i plików stanu |
 
-W `Jenkinsfile` wartość `ECR_REGISTRY` musi zawierać właściwy 12-cyfrowy
-AWS Account ID, np.:
+## 3. Wymagania wstępne
 
-``` groovy
-ECR_REGISTRY = '<AWS_ACCOUNT_ID>.dkr.ecr.eu-central-1.amazonaws.com'
+Przed rozpoczęciem odtwarzania przygotuj:
+
+- konto AWS z odpowiednimi uprawnieniami;
+- AWS CLI;
+- Terraform;
+- `kubectl`;
+- Helm;
+- Git;
+- Podman;
+- konto GitHub z dostępem do repozytorium.
+
+Sprawdź instalację:
+
+```bash
+aws --version
+terraform version
+kubectl version --client
+helm version
+git --version
+podman --version
 ```
 
-Zamień placeholder na rzeczywisty numer konta przed commitem. Nie wpisuj
-do repozytorium kluczy AWS ani tokenów.
+Sprawdź konto AWS:
 
-Pipeline używa `${BUILD_NUMBER}` jako tagu obrazu, dzięki czemu każdy
-build publikuje nowy tag i może wprowadzić zmianę do
-`nginx/values.yaml`. Po buildzie `Success` sprawdź, czy nowy tag jest w
-GitHub i czy Argo CD zsynchronizowało aplikację.
-
-## 5. Szybkie odtworzenie po usunięciu klastra
-
-Wykonuj kroki po kolei. Polecenia są przeznaczone dla Git Bash z
-zainstalowanymi i skonfigurowanymi AWS CLI, Terraform, kubectl, Helm i
-Git.
-
-### A. Sprawdź dostęp do AWS i Terraform
-
-``` bash
+```bash
 aws sts get-caller-identity
 aws configure get region
-cd aws-gitops-lab
+```
+
+Upewnij się, że korzystasz z właściwego konta i regionu AWS.
+
+## 4. Bezpieczeństwo i plik stanu Terraform
+
+Terraform wykorzystuje plik stanu do powiązania konfiguracji z istniejącymi zasobami AWS.
+
+Kod zapisany w GitHubie nie zastępuje pliku stanu. W tym labie stan był przechowywany lokalnie.
+
+Plik stanu może zawierać identyfikatory zasobów oraz wrażliwe wartości. Nie należy publikować go w repozytorium.
+
+W pliku `.gitignore` powinny znaleźć się co najmniej następujące reguły:
+
+```gitignore
+# Terraform
+**/.terraform/*
+*.tfstate
+*.tfstate.*
+*.tfvars
+*.tfvars.json
+crash.log
+crash.*.log
+```
+
+Nie należy publikować również:
+- tokenów GitHub;
+- haseł Jenkins;
+- kluczy dostępowych AWS;
+- plików konfiguracyjnych zawierających sekrety.
+
+**Ważne:** jeśli plik stanu został wcześniej dodany do Git, samo umieszczenie go w `.gitignore` nie usuwa go z historii repozytorium.
+
+W przypadku długotrwałego środowiska warto rozważyć zdalny backend Terraform, np. S3, z odpowiednią kontrolą dostępu i wersjonowaniem.
+
+## 5. Odtwarzanie infrastruktury AWS
+
+### 5.1. Pobranie repozytorium
+
+```bash
+git clone https://github.com/7kampe/gitops-demo.git
+cd gitops-demo
+```
+
+Jeśli repozytorium jest już lokalnie:
+
+```bash
+git pull
+```
+
+### 5.2. Przejście do katalogu Terraform
+
+```bash
+cd terraform
+```
+
+Przed uruchomieniem Terraform przejrzyj pliki:
+
+- `main.tf`;
+- `variables.tf`;
+- `outputs.tf`.
+
+Sprawdź region, nazwę klastra, wersję Kubernetes, typ instancji, konfigurację sieci i wymagane zmienne.
+
+### 5.3. Inicjalizacja i walidacja
+
+```bash
 terraform init
+terraform fmt -check
+terraform validate
 terraform plan
+```
+
+Przed zastosowaniem konfiguracji sprawdź plan i upewnij się, że Terraform korzysta z właściwego konta AWS oraz właściwego stanu.
+
+Jeśli plan jest zgodny z oczekiwaniami:
+
+```bash
 terraform apply
 ```
 
-Sprawdź plan przed zatwierdzeniem. `terraform apply` może utworzyć
-płatne zasoby AWS, w szczególności EKS i instancję EC2. Nie uruchamiaj
-`terraform destroy`, jeśli chcesz zachować środowisko.
+Nie uruchamiaj `apply`, jeśli Terraform nie widzi właściwego stanu albo planuje niespodziewane utworzenie lub usunięcie zasobów.
 
-Po utworzeniu klastra skonfiguruj kubectl:
+## 6. Konfiguracja dostępu do EKS
 
-``` bash
-aws eks update-kubeconfig --name gitops-lab --region eu-central-1
+W poprzedniej wersji labu klaster miał nazwę `gitops-lab` i działał w regionie `eu-central-1`.
+
+Po utworzeniu klastra zaktualizuj kubeconfig:
+
+```bash
+aws eks update-kubeconfig \
+  --region eu-central-1 \
+  --name gitops-lab
+```
+
+Sprawdź węzły:
+
+```bash
 kubectl get nodes
 ```
 
-Oczekiwany wynik: co najmniej jeden węzeł w stanie `Ready`.
+Sprawdź namespace’y i pody:
 
-### B. Zainstaluj EKS Pod Identity Agent
-
-Sprawdź, czy agent już działa:
-
-``` bash
-kubectl get pods -n kube-system | grep eks-pod-identity
+```bash
+kubectl get namespaces
+kubectl get pods -A
 ```
 
-Jeśli dodatku nie ma, utwórz go:
+Węzły powinny osiągnąć stan `Ready`, zanim przejdziesz do konfiguracji aplikacji.
 
-``` bash
-aws eks create-addon \
-  --cluster-name gitops-lab \
-  --addon-name eks-pod-identity-agent \
-  --region eu-central-1
-```
+Jeśli nazwa klastra została zmieniona w Terraform, użyj aktualnej nazwy.
 
-Poczekaj, aż pody dodatku będą działały.
+## 7. Jenkins
 
-### C. Odtwórz namespace i Argo CD
+W poprzednim labie Jenkins działał w namespace `jenkins`.
 
-``` bash
-kubectl create namespace argocd
-kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
-kubectl get pods -n argocd
-```
+Panel można udostępnić lokalnie poleceniem:
 
-Poczekaj, aż komponenty Argo CD będą gotowe. Z katalogu lokalnego
-repozytorium `gitops-demo` zastosuj aplikację:
-
-``` bash
-kubectl apply -f argocd/nginx-demo.yaml
-kubectl get applications -n argocd
-kubectl get pods
-```
-
-Sprawdź, czy aplikacja `nginx-demo` osiągnie `Healthy` i `Synced`. Jeśli
-Argo CD potrzebuje chwili na instalację CRD, odczekaj i ponów
-sprawdzenie.
-
-### D. Odtwórz Jenkinsa bez trwałego wolumenu
-
-``` bash
-helm repo add jenkins https://charts.jenkins.io
-helm repo update
-kubectl create namespace jenkins
-helm install jenkins jenkins/jenkins -n jenkins --set persistence.enabled=false
-kubectl get pods -n jenkins
-```
-
-Jeśli namespace już istnieje, nie twórz go ponownie --- przejdź do
-instalacji. Jeśli release już istnieje, sprawdź go przez
-`helm list -n jenkins`, zamiast instalować drugi raz.
-
-Otwórz panel:
-
-``` bash
+```bash
 kubectl port-forward svc/jenkins -n jenkins 8081:8080
 ```
 
-Wejdź na `http://localhost:8081`. Hasło administratora:
+Następnie otwórz w przeglądarce:
 
-``` bash
-kubectl exec -n jenkins svc/jenkins -- cat /run/secrets/chart-admin-password
+`http://localhost:8081`
+
+W poprzedniej konfiguracji hasło administratora można było odczytać poleceniem:
+
+```bash
+kubectl exec -n jenkins svc/jenkins -- \
+  cat /run/secrets/chart-admin-password
 ```
 
-**Uwaga:** ponieważ `persistence.enabled=false`, konfiguracja Jenkinsa
-(joby, credentials i ustawienia UI) nie przetrwa usunięcia poda/release.
-Po reinstalacji trzeba ją odtworzyć.
+Polecenie zadziała tylko wtedy, gdy Jenkins został zainstalowany w sposób zgodny z tą konfiguracją i sekret istnieje.
 
-### E. Odtwórz konto serwisowe i Pod Identity
+### 7.1. Konfiguracja joba
 
-``` bash
-kubectl create serviceaccount jenkins-agent -n jenkins
+Job nazywał się `gitops-demo`.
+
+Podstawowe ustawienia:
+
+- Definition: `Pipeline script from SCM`;
+- SCM: `Git`;
+- Repository URL: `https://github.com/7kampe/gitops-demo.git`;
+- Branch: `*/main`;
+- Script Path: `Jenkinsfile`;
+- Credential ID: `github-push`.
+
+Token GitHub należy przechowywać w Jenkins Credentials. Nie wolno umieszczać go bezpośrednio w `Jenkinsfile` ani w repozytorium.
+
+### 7.2. Agent Kubernetes
+
+W poprzedniej konfiguracji używany był agent:
+
+- namespace: `jenkins`;
+- label: `gitops-agent`;
+- service account: `jenkins-agent`;
+- obraz z Amazon ECR: `gitops-jenkins-agent`;
+- kontener narzędziowy: `tools`.
+
+Pipeline odwoływał się do niego przez `container('tools')`.
+
+Po odtworzeniu sprawdź zgodność konfiguracji Pod Template, nazwy obrazu, tagu i uprawnień IAM.
+
+Tryb privileged i montowanie `/var/lib/containers` zwiększają uprawnienia kontenera. Używaj ich tylko w świadomie skonfigurowanym środowisku testowym.
+
+## 8. Amazon ECR i uprawnienia IAM
+
+W poprzednim labie używano dwóch repozytoriów ECR:
+
+- `gitops-demo`;
+- `gitops-jenkins-agent`.
+
+Skonfigurowano także rolę IAM `gitops-jenkins-ecr` oraz EKS Pod Identity dla konta serwisowego `jenkins-agent` w namespace `jenkins`.
+
+Część tych zasobów została utworzona ręcznie, a nie przez Terraform. Dlatego udany `terraform destroy` nie musi oznaczać, że wszystkie zostały usunięte.
+
+Sprawdź repozytoria ECR:
+
+```bash
+aws ecr describe-repositories --region eu-central-1
 ```
 
-Jeśli konto już istnieje, komunikat `AlreadyExists` jest w porządku.
+Sprawdź rolę IAM:
 
-Sprawdź, czy rola IAM istnieje:
-
-``` bash
-aws iam get-role --role-name gitops-jenkins-ecr --query "Role.Arn" --output text
+```bash
+aws iam get-role --role-name gitops-jenkins-ecr
 ```
 
-Sprawdź istniejące powiązania:
+Sprawdź klastry EKS:
 
-``` bash
-aws eks list-pod-identity-associations \
-  --cluster-name gitops-lab \
-  --region eu-central-1
+```bash
+aws eks list-clusters --region eu-central-1
 ```
 
-Jeśli nie ma powiązania dla namespace `jenkins` i service account
-`jenkins-agent`, utwórz je:
+Nie usuwaj ręcznie pozostałych zasobów IAM i ECR, dopóki nie upewnisz się, że nie są wykorzystywane przez inne projekty.
 
-``` bash
-aws eks create-pod-identity-association \
-  --cluster-name gitops-lab \
-  --namespace jenkins \
-  --service-account jenkins-agent \
-  --role-arn "$(aws iam get-role --role-name gitops-jenkins-ecr --query 'Role.Arn' --output text)" \
-  --region eu-central-1
-```
+Przechowywane obrazy ECR mogą nadal generować koszty.
 
-Rola `gitops-jenkins-ecr` musi mieć zaufanie do EKS Pod Identity
-(`pods.eks.amazonaws.com`) oraz uprawnienia do logowania i pushowania do
-repozytorium ECR `gitops-demo`. Jeśli rola lub polityka nie istnieje,
-odtwórz ją zgodnie z zasadą najmniejszych uprawnień przed uruchomieniem
-pipeline'u. Nie zapisuj kluczy AWS w Jenkinsie.
+## 9. Argo CD
 
-### F. Odtwórz konfigurację Jenkinsa w UI
+W poprzedniej konfiguracji Argo CD działał w namespace `argocd`.
 
-1.  Zaloguj się do Jenkins.
-2.  **Manage Jenkins → Credentials → System → Global credentials → Add
-    Credentials**:
-    -   Kind: `Username with password`
-    -   Username: login GitHub
-    -   Password: GitHub Personal Access Token (wklej wyłącznie w
-        Jenkinsie)
-    -   ID: `github-push`
-3.  **Manage Jenkins → Clouds → Kubernetes → Configure**:
-    -   Kubernetes URL: `https://kubernetes.default`
-    -   Jenkins URL: `http://jenkins.jenkins.svc.cluster.local:8080`
-4.  Utwórz Pod Template:
-    -   Name: `gitops-agent`
-    -   Namespace: `jenkins`
-    -   Labels: `gitops-agent`
-    -   Service Account: `jenkins-agent`
-5.  Dodaj kontener:
-    -   Name: `tools`
-    -   Image:
-        `<AWS_ACCOUNT_ID>.dkr.ecr.eu-central-1.amazonaws.com/gitops-jenkins-agent:3.0`
-    -   Working directory: `/home/jenkins/agent`
-    -   Privileged: włączone (wymagane przez obecną konfigurację Podman
-        w tym labie)
-    -   EmptyDir volume zamontowany pod `/var/lib/containers`
-    -   Jeśli jest opcja agent container / run in container, ustaw
-        `tools` jako kontener wykonywania kroków.
-6.  Zapisz konfigurację chmury.
-7.  Utwórz job `gitops-demo` typu **Pipeline**:
-    -   Definition: `Pipeline script from SCM`
-    -   SCM: `Git`
-    -   Repository URL: `https://github.com/7kampe/gitops-demo.git`
-    -   Credentials: `github-push` (jeśli job korzysta z tego
-        credential)
-    -   Branch Specifier: `*/main`
-    -   Script Path: `Jenkinsfile`
-8.  Zapisz job i kliknij **Build Now**.
+Aplikacja nazywała się `nginx-demo` i korzystała z Helm chartu w katalogu `nginx` repozytorium GitHub.
 
-Upewnij się, że numer konta AWS w obrazie agenta i w `Jenkinsfile` jest
-poprawny. Obraz `gitops-jenkins-agent:3.0` musi już istnieć w ECR; jeśli
-nie istnieje, najpierw trzeba go zbudować i wypchnąć zgodnie z
-instrukcją obrazu agenta.
+Po odtworzeniu klastra i instalacji Argo CD sprawdź:
 
-## 6. Test końcowy
-
-Po udanym buildzie sprawdź:
-
-``` bash
+```bash
+kubectl get pods -n argocd
 kubectl get applications -n argocd
-kubectl get pods
-kubectl get deployment nginx -o jsonpath="{.spec.template.spec.containers[0].image}"
 ```
 
-Oczekiwane: - Jenkins build: `SUCCESS` - Argo CD application: `Healthy`
-i `Synced` - pody nginx: `Running` - obraz deploymentu ma tag
-odpowiadający ostatniemu buildowi.
+Aplikacja powinna być zsynchronizowana z repozytorium i osiągnąć stan `Healthy`, jeśli konfiguracja i zasoby zostały prawidłowo odtworzone.
 
-Jeżeli deployment ma inną nazwę niż `nginx`, sprawdź
-`kubectl get deployments` i użyj właściwej nazwy.
+## 10. Przepływ CI/CD
 
-## 7. Typowe problemy
+Pipeline realizuje następujący przepływ:
 
-### Jenkins pod czeka na PVC (`Pending`)
+1. Pobranie kodu z GitHub.
+2. Weryfikacja zawartości repozytorium.
+3. Walidacja Helm chartu przez `helm lint`.
+4. Budowanie obrazu aplikacji przez Podman.
+5. Logowanie do Amazon ECR.
+6. Publikacja obrazu z tagiem powiązanym z numerem buildu.
+7. Aktualizacja tagu obrazu w `nginx/values.yaml`.
+8. Commit i push zmiany do GitHub.
+9. Wykrycie zmiany przez Argo CD i synchronizacja aplikacji.
 
-Sprawdź:
+W poprzednim uruchomieniu labu pipeline zakończył się sukcesem. Po odtworzeniu należy osobno zweryfikować wynik buildu, obecność obrazu w ECR i stan aplikacji w Argo CD.
 
-``` bash
-kubectl get pvc -n jenkins
-helm get values jenkins -n jenkins
-```
+## 11. Sprzątanie środowiska
 
-W tym labie Jenkins powinien być zainstalowany z
-`--set persistence.enabled=false`. Jeśli poprzedni release miał domyślne
-PVC, odinstaluj release, sprawdź i usuń stary PVC tylko wtedy, gdy
-akceptujesz utratę zapisanych w nim danych, a następnie zainstaluj
-ponownie z persistence wyłączonym.
+Przed usunięciem infrastruktury:
 
-### Agent Jenkins nie startuje
+1. Zapisz kod w GitHub.
+2. Sprawdź konto AWS:
 
-Sprawdź namespace, etykietę `gitops-agent`, nazwę kontenera `tools`,
-service account `jenkins-agent`, adres obrazu i dostępność obrazu agenta
-w ECR. Sprawdź też:
+   ```bash
+   aws sts get-caller-identity
+   ```
 
-``` bash
-kubectl get pods -n jenkins
-kubectl describe pod <NAZWA_PODA> -n jenkins
-```
+3. Przejdź do katalogu Terraform z właściwym stanem.
+4. Sprawdź plan usuwania:
 
-### AWS ECR zwraca błąd dostępu
+   ```bash
+   terraform plan -destroy
+   ```
 
-Sprawdź, czy Pod Identity Agent działa, czy istnieje powiązanie
-namespace/service account z rolą, oraz czy rola ma wymagane uprawnienia
-ECR. Test `aws sts get-caller-identity` wykonany wewnątrz kontenera
-`tools` powinien zwracać rolę `gitops-jenkins-ecr`.
+5. Upewnij się, że plan dotyczy wyłącznie zasobów labu.
+6. Dopiero wtedy uruchom:
 
-### Build kończy się `nothing to commit`
+   ```bash
+   terraform destroy
+   ```
 
-To znaczy, że `nginx/values.yaml` nie zmienił się względem bieżącego
-commita. Używaj unikalnego tagu, np. numeru buildu (`BUILD_NUMBER`), i
-sprawdź, czy `sed` aktualizuje dokładnie linię `tag` w
-`nginx/values.yaml`.
+7. Sprawdź, czy klaster nadal istnieje:
 
-### Argo CD nie aktualizuje aplikacji
+   ```bash
+   aws eks list-clusters --region eu-central-1
+   ```
 
-Sprawdź:
+8. Zweryfikuj pozostałe zasoby ręczne, w szczególności ECR i IAM.
 
-``` bash
-kubectl get applications -n argocd
-kubectl describe application nginx-demo -n argocd
-```
+Nie kasuj plików stanu ani kopii zapasowych, dopóki nie potwierdzisz, że nie są już potrzebne.
 
-Zweryfikuj `repoURL`, `targetRevision: main`, `path: nginx` w
-`argocd/nginx-demo.yaml`, a także czy Jenkins wypchnął zmianę do GitHub.
+## 12. Rozwiązywanie problemów
 
-## 8. Koszty i sprzątanie
+### Terraform zgłasza `No state file found`
 
--   `t3.medium` oraz EKS generują koszty, gdy lab działa.
--   NAT Gateway jest wyłączony, aby ograniczyć koszty.
--   Jenkins nie używa trwałego PVC, więc jego konfiguracja nie jest
-    trwała.
--   Obrazy ECR i ręcznie utworzone zasoby IAM/ECR mogą pozostać po
-    usunięciu klastra i nadal wymagać osobnego sprzątnięcia.
--   Przed `terraform destroy` sprawdź, jakie zasoby należą do Terraform.
-    Zasoby utworzone ręcznie (np. repozytoria ECR, rola IAM, Pod
-    Identity association) niekoniecznie zostaną usunięte przez
-    Terraform.
--   Po zakończeniu pracy, jeśli nie potrzebujesz środowiska, rozważ
-    `terraform destroy` po dokładnym sprawdzeniu planu. To usuwa zasoby
-    zarządzane przez Terraform, ale nie musi usuwać wszystkiego, co
-    utworzono poza nim.
+- Sprawdź katalog roboczy.
+- Sprawdź backend i workspace.
+- Upewnij się, że stan nie pozostał w poprzednim katalogu.
+- Nie uruchamiaj `apply` ani `destroy`, jeśli stan nie jest właściwy.
+- Nie kopiuj plików stanu w ciemno.
 
-## 9. Checklist po odtworzeniu
+### `kubectl` nie łączy się z klastrem
 
--   [ ] `kubectl get nodes` pokazuje węzeł `Ready`
--   [ ] EKS Pod Identity Agent działa
--   [ ] Argo CD działa w namespace `argocd`
--   [ ] `nginx-demo` jest `Healthy` / `Synced`
--   [ ] Jenkins działa bez PVC
--   [ ] Service account `jenkins-agent` istnieje
--   [ ] Pod Identity association wskazuje właściwą rolę IAM
--   [ ] Jenkins credentials `github-push` są skonfigurowane
--   [ ] Pod Template `gitops-agent` ma kontener `tools` i EmptyDir
--   [ ] Job `gitops-demo` wskazuje na `Jenkinsfile` w gałęzi `main`
--   [ ] Jenkins build kończy się `SUCCESS`
--   [ ] Argo CD wdraża tag obrazu z ostatniego buildu
+- Sprawdź `aws sts get-caller-identity`.
+- Zweryfikuj nazwę klastra i region.
+- Odśwież kubeconfig.
+- Upewnij się, że klaster istnieje i użytkownik ma uprawnienia.
+
+### Jenkins nie może wypchnąć obrazu do ECR
+
+- Sprawdź region i nazwę repozytorium.
+- Zweryfikuj Pod Identity i rolę IAM.
+- Sprawdź logi buildu i uprawnienia agenta.
+- Nie zapisuj kluczy AWS w repozytorium.
+
+### Argo CD nie synchronizuje aplikacji
+
+- Sprawdź, czy commit trafił do właściwej gałęzi.
+- Sprawdź URL repozytorium i ścieżkę Helm chartu.
+- Zweryfikuj stan aplikacji w Argo CD.
+- Upewnij się, że wymagany tag obrazu istnieje w ECR.
+
+## 13. Checklista końcowa
+
+- [ ] Kod Terraform znajduje się w `terraform/`.
+- [ ] `.gitignore` wyklucza pliki stanu i lokalne pliki zmiennych.
+- [ ] W repozytorium nie ma tokenów, haseł ani kluczy.
+- [ ] Terraform używa właściwego stanu, konta AWS i regionu.
+- [ ] `terraform init`, `terraform validate` i `terraform plan` działają poprawnie.
+- [ ] Węzły EKS są w stanie `Ready`.
+- [ ] Jenkins build kończy się sukcesem.
+- [ ] Argo CD pokazuje aplikację jako `Healthy` i `Synced`.
+- [ ] Po `destroy` sprawdzono ręcznie utworzone zasoby i możliwe dalsze koszty.
