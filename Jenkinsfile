@@ -5,10 +5,14 @@ pipeline {
         }
     }
 
+    options {
+        skipDefaultCheckout(true)
+    }
+
     environment {
-        ECR_REGISTRY = '211007024623.dkr.ecr.eu-west-1.amazonaws.com'
+        ECR_REGISTRY   = '211007024623.dkr.ecr.eu-west-1.amazonaws.com'
         ECR_REPOSITORY = 'gitops-demo'
-        AWS_REGION = 'eu-west-1'
+        AWS_REGION     = 'eu-west-1'
     }
 
     stages {
@@ -20,7 +24,7 @@ pipeline {
                     branches: [[name: '*/main']],
                     userRemoteConfigs: [[
                         url: 'https://github.com/7kampe/gitops-demo.git',
-                        credentialsId: 'github-push'
+                        credentialsId: 'git-push'
                     ]]
                 ])
 
@@ -88,60 +92,4 @@ pipeline {
                         aws ecr get-login-password \
                           --region ${AWS_REGION} | \
                           podman login \
-                          --username AWS \
-                          --password-stdin \
-                          ${ECR_REGISTRY}
-
-                        echo "=== Push image ${GIT_SHA} ==="
-
-                        podman push \
-                          ${ECR_REGISTRY}/${ECR_REPOSITORY}:${GIT_SHA}
-                    '''
-                }
-            }
-        }
-
-        stage('Update Helm values') {
-    steps {
-        container('tools') {
-            sh '''
-                echo "=== Current tag ==="
-                grep -n "tag:" nginx/values.yaml
-
-                echo "=== Updating tag to ${GIT_SHA} ==="
-
-                sed -i "s/tag: \\".*\\"/tag: \\"${GIT_SHA}\\"/" nginx/values.yaml
-
-                echo "=== New tag ==="
-                grep -n "tag:" nginx/values.yaml
-
-                echo "=== Git diff ==="
-                git diff -- nginx/values.yaml
-            '''
-        }
-    }
-}
-
-        stage('Commit and Push') {
-            steps {
-                container('tools') {
-                    sh '''
-                        git config user.name "Jenkins"
-                        git config user.email "jenkins@localhost"
-
-                        git add nginx/values.yaml
-
-                        if git diff --cached --quiet; then
-                            echo "No changes to commit"
-                            exit 0
-                        fi
-
-                        git commit -m "Update image tag to ${GIT_SHA}"
-
-                        git push origin HEAD:main
-                    '''
-                }
-            }
-        }
-    }
-}
+             
