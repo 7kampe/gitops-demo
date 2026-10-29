@@ -130,7 +130,6 @@ pipeline {
         stage('Commit and Push') {
             steps {
                 container('tools') {
-
                     withCredentials([
                         usernamePassword(
                             credentialsId: 'git-push',
@@ -138,8 +137,9 @@ pipeline {
                             passwordVariable: 'GIT_TOKEN'
                         )
                     ]) {
-
                         sh '''
+                            set -eu
+
                             git config user.name "Jenkins"
                             git config user.email "jenkins@localhost"
 
@@ -155,11 +155,31 @@ pipeline {
                             git commit \
                               -m "Update image tag to ${GIT_SHA}"
 
+                            echo "=== Configure Git authentication ==="
+
+                            ASKPASS_FILE="$(mktemp)"
+
+                            cat > "${ASKPASS_FILE}" <<'EOF'
+#!/bin/sh
+case "$1" in
+    *Username*)
+        printf '%s\\n' "${GIT_USERNAME}"
+        ;;
+    *Password*)
+        printf '%s\\n' "${GIT_TOKEN}"
+        ;;
+esac
+EOF
+
+                            chmod 700 "${ASKPASS_FILE}"
+
                             echo "=== Push to GitHub ==="
 
-                            git push \
-                              "https://${GIT_USERNAME}:${GIT_TOKEN}@github.com/7kampe/gitops-demo.git" \
-                              HEAD:main
+                            GIT_ASKPASS="${ASKPASS_FILE}" \
+                            GIT_TERMINAL_PROMPT=0 \
+                            git push origin HEAD:main
+
+                            rm -f "${ASKPASS_FILE}"
                         '''
                     }
                 }
