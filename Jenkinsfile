@@ -102,27 +102,25 @@ pipeline {
         }
 
         stage('Update Helm values') {
-            steps {
-                container('tools') {
-                    sh '''
-                        echo "=== Current tag ==="
-                        grep -n "tag:" nginx/values.yaml
+    steps {
+        container('tools') {
+            sh '''
+                echo "=== Current tag ==="
+                grep -n "tag:" nginx/values.yaml
 
-                        echo "=== Updating tag to ${GIT_SHA} ==="
+                echo "=== Updating tag to ${GIT_SHA} ==="
 
-                        sed -i \
-                          's/tag: ".*"/tag: "'"${GIT_SHA"'"/' \
-                          nginx/values.yaml
+                sed -i "s/tag: \\".*\\"/tag: \\"${GIT_SHA}\\"/" nginx/values.yaml
 
-                        echo "=== New tag ==="
-                        grep -n "tag:" nginx/values.yaml
+                echo "=== New tag ==="
+                grep -n "tag:" nginx/values.yaml
 
-                        echo "=== Git diff ==="
-                        git diff -- nginx/values.yaml
-                    '''
-                }
-            }
+                echo "=== Git diff ==="
+                git diff -- nginx/values.yaml
+            '''
         }
+    }
+}
 
         stage('Commit and Push') {
             steps {
